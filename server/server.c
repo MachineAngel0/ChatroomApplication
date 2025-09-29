@@ -87,9 +87,59 @@ int get_listener_socket() {
     //free memory as its no longer in use
     freeaddrinfo(res);
 
+    if (listen(listener_socket, 10) == -1) {
+        perror("listen");
+        return -1;
+    }
+
     return listener_socket;
 }
 
+
+void handle_client_data(int listener_socket, int *fd_count, struct pollfd *pfds, int i) {
+    //otherwise its just a client doing something
+    char buffer[256]; // client buffer data
+
+    //read from client
+    int nbytes = recv(pfds[i].fd, &buffer, sizeof(buffer), 0);
+
+    int sender_fd = pfds[i].fd;
+
+    if (nbytes <= 0)
+    {
+        // error or connection closed
+        if (nbytes == 0) {
+            //connection closed
+            printf("server: socket %d hug up\n", sender_fd);
+        } else {
+            perror("recv");
+        }
+
+        printf("closing a socket");
+        close(pfds[i].fd); // close connection
+
+        //copy the last socket onto this socket
+        pfds[i] = pfds[*fd_count - 1];
+        (*fd_count)--;
+    }
+    else
+    {
+        // we got valid data from client
+        printf("server: received from fd: %d: %.*s\n", sender_fd, nbytes, buffer);
+
+        //send message to everyone
+        for (int j = 0; j < *fd_count; j++) {
+            int dest_fd = pfds[j].fd;
+
+            //send to everyone except the listener and the sender themselves
+            if (dest_fd != listener_socket && dest_fd != sender_fd) {
+                if (send(dest_fd, &buffer, nbytes, 0) == -1) {
+                    perror("send");
+                };
+            }
+        }
+    }
+}
 
 int main(void) {
     printf("Hello, SERVER!\n");
@@ -132,9 +182,10 @@ int main(void) {
             //check if theres something from a socket
             //pollin - alert me when data is ready to recv() on this socket
             // pollhup alert me when the remote closed the connection
-            if (pfds[i].revents == (POLLIN | POLLHUP)) {
+            if (pfds[i].revents & (POLLIN | POLLHUP)) {
                 //if its the listener we got a new connection
-                if (pfds[i].fd == listener_socket) {
+                if (pfds[i].fd == listener_socket)
+                {
                     struct sockaddr_storage remoteaddr; //client address
                     socklen_t addrlen;
                     int newfd; // new accept() socket
@@ -163,45 +214,10 @@ int main(void) {
                         printf("New connection from %s on socket %d\n",
                                inet_ntop2(&remoteaddr, remoteIP, sizeof remoteIP), newfd);
                     }
-                } else {
-                    //otherwise its just a client doing something
-                    char buffer[256]; // client buffer data
-
-                    //read from client
-                    int nbytes = recv(pfds[i].fd, &buffer, sizeof(buffer), 0);
-
-                    int sender_fd = pfds[i].fd;
-
-                    if (nbytes <= 0) {
-                        // error or connection closed
-                        if (nbytes == 0) {
-                            //connection closed
-                            printf("server: socket %d hug up\n", sender_fd);
-                        } else {
-                            perror("recv");
-                        }
-
-                        close(pfds[i].fd); // close connection
-
-                        //copy the last socket onto this socket
-                        pfds[i] = pfds[fd_count - 1];
-                        fd_count--;
-                    } else {
-                        // we got valid data from client
-                        printf("server: received from fd: %d: %.%s\n", sender_fd, nbytes, buffer);
-
-                        //send message to everyone
-                        for (int j = 0; j < fd_count; j++) {
-                            int dest_fd = pfds[j].fd;
-
-                            //send to everyone except the listener and the sender themselves
-                            if (dest_fd != sender_fd && dest_fd != sender_fd) {
-                                if (send(dest_fd, &buffer, nbytes, 0) == -1) {
-                                    perror("send");
-                                };
-                            }
-                        }
-                    }
+                }
+                else
+                {
+                    handle_client_data(listener_socket, &fd_count, pfds, i);
                 }
             };
         }
